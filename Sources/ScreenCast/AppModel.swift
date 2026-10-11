@@ -10,7 +10,7 @@ enum AppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .screenRecordingPermission:
-            "Screen Cast needs permission to record your screen. Turn it on in Privacy & Security › Screen & System Audio Recording, then quit and reopen the app."
+            "Screen Cast needs permission to record your screen. Turn it on in Privacy & Security › Screen & System Audio Recording (if it isn't listed, click + and add it), then quit and reopen the app."
         case .noDisplay:
             "Couldn't find a screen to cast."
         case .virtualDisplayFailed:
@@ -181,6 +181,9 @@ final class AppModel: ObservableObject {
             var capture: (display: SCDisplay, excludedApps: [SCRunningApplication])?
             if !testPattern {
                 guard CGPreflightScreenCaptureAccess() else {
+                    // On macOS 15, asking ScreenCaptureKit is what shows the system prompt and adds the app
+                    // to the list in Settings; CGRequestScreenCaptureAccess alone no longer does.
+                    _ = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                     CGRequestScreenCaptureAccess()
                     throw AppError.screenRecordingPermission
                 }
