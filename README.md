@@ -26,10 +26,6 @@ Screen Cast is a free, open-source Mac app that sends your screen to a Chromecas
 - **Low delay**: about 0.05–0.25 s, your choice. You can change it while casting.
 - **Live connection stats**: delay, frame rate, bitrate, round trip, packet loss, and Wi-Fi speed and signal.
 
-<p align="center">
-  <img src="docs/images/screenshot.png" width="400" alt="Screen Cast casting to a TV as a second display, with live connection statistics">
-</p>
-
 ## Requirements
 
 - macOS 13 Ventura or later, on an Apple Silicon or Intel Mac
