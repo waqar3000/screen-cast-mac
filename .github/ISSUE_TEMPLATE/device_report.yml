@@ -1,0 +1,30 @@
+name: Device report
+description: Tell us whether Screen Cast works with your Cast device
+labels: [device report]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Cast device
+      placeholder: Chromecast (3rd generation), Sony Bravia with Chromecast built-in…
+    validations:
+      required: true
+  - type: dropdown
+    id: works
+    attributes:
+      label: Does it work?
+      options:
+        - Yes, mirror and second display
+        - Partly (please explain below)
+        - No
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Delay setting you use, picture quality, anything else worth knowing.

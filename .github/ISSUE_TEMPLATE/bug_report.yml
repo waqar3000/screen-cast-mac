@@ -1,0 +1,41 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: macOS 15.7, MacBook Pro (M3)
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Cast device
+      placeholder: Chromecast with Google TV (4K)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Mirror
+        - Second display
+        - Both
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnostic log
+      description: |
+        Run this in Terminal right after the problem and paste the output (remove anything you'd rather not share):
+        `log show --last 10m --predicate 'process == "ScreenCast" AND eventMessage BEGINSWITH "["'`
+      render: text
