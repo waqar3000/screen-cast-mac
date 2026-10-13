@@ -13,21 +13,26 @@ enum EncoderError: LocalizedError {
 
 /// Hardware H.264 encoding tuned for mirroring: real time, no frame reordering, no buffering.
 /// Output is Annex B (start codes) with SPS/PPS in front of every key frame, as Cast receivers expect.
-final class VideoEncoder: @unchecked Sendable {  // mutable state is lock-protected; VideoToolbox is thread-safe
+final class VideoEncoder: @unchecked Sendable {  // state is confined to `queue`, except the copy bookkeeping (locked)
     /// Called on a VideoToolbox thread for every encoded frame.
     /// `isCopy` marks the copies used to push a frame out of the encoder (see `encode`).
     var onEncodedFrame: ((_ data: Data, _ isKeyFrame: Bool, _ isCopy: Bool, _ presentationTime: CMTime) -> Void)?
 
     private let session: VTCompressionSession
-    private let lock = NSLock()
-    private let pushQueue = DispatchQueue(label: "VideoEncoder.push", qos: .userInteractive)
+    /// Every frame reaches the encoder from this queue, so captured frames and push-out copies can't
+    /// collide or arrive out of order.
+    private let queue = DispatchQueue(label: "VideoEncoder", qos: .userInteractive)
     private var forceKeyFrame = false
     private var latestFrame: CVPixelBuffer?
     private var latestTime = CMTime.negativeInfinity
     private var framesSubmitted = 0
+    private var copiesSubmitted = 0
     private var lastWasCopy = false
-    /// When to show a copy that was waiting in the encoder: just before the frame that pushed it out.
-    private var copyShowTime = CMTime.invalid
+    // Copy bookkeeping, shared with VideoToolbox's output thread.
+    private let copyLock = NSLock()
+    private var lastCopyOut = 0
+    /// For a copy still in the encoder when the next frame arrives: show it just before that frame.
+    private var copyShowTimes: [Int: CMTime] = [:]
 
     init(width: Int, height: Int, frameRate: Int, bitRate: Int) throws {
         var session: VTCompressionSession?
@@ -65,46 +70,64 @@ final class VideoEncoder: @unchecked Sendable {  // mutable state is lock-protec
         VTCompressionSessionInvalidate(session)
     }
 
+    /// Makes the next captured frame a key frame. Any thread.
     func requestKeyFrame() {
-        lock.withLock { forceKeyFrame = true }
+        queue.async { self.forceKeyFrame = true }
     }
 
+    /// Encodes a captured frame. Any thread.
     func encode(_ pixelBuffer: CVPixelBuffer, presentationTime: CMTime) {
-        let submitted = submit(pixelBuffer, at: presentationTime, isCopy: false)
-        // The hardware encoder holds each frame until the next one arrives, which on a still screen could be
-        // seconds. If nothing new comes within 25 ms (a little over a frame at 60 fps), feed it a copy of the
-        // frame to push the real one out.
-        // The copy encodes to a few bytes and is sent like any other frame, keeping the TV's decoder in step.
-        pushQueue.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-            guard let self, let frame = lock.withLock({ self.framesSubmitted == submitted ? self.latestFrame : nil }) else { return }
-            submit(frame, at: CMClockGetTime(CMClockGetHostTimeClock()), isCopy: true)
+        queue.async { [self] in
+            submit(pixelBuffer, at: presentationTime, isCopy: false)
+            // The hardware encoder holds each frame until the next one arrives, which on a still screen could be
+            // seconds. If nothing new comes within 25 ms (a little over a frame at 60 fps), feed it a copy of the
+            // frame to push the real one out.
+            // The copy encodes to a few bytes and is sent like any other frame, keeping the TV's decoder in step.
+            let submitted = framesSubmitted
+            queue.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
+                guard let self, framesSubmitted == submitted, let latestFrame else { return }
+                submit(latestFrame, at: CMClockGetTime(CMClockGetHostTimeClock()), isCopy: true)
+            }
         }
     }
 
-    @discardableResult
-    private func submit(_ pixelBuffer: CVPixelBuffer, at time: CMTime, isCopy: Bool) -> Int {
-        let (keyFrame, presentationTime, count) = lock.withLock { () -> (Bool, CMTime, Int) in
-            // Timestamps must keep increasing, even if a captured frame was stamped just before a copy.
-            latestTime = max(time, latestTime + CMTime(value: 1, timescale: 90_000))
-            if !isCopy {
-                latestFrame = pixelBuffer
-                framesSubmitted += 1
-                if lastWasCopy { copyShowTime = latestTime - CMTime(value: 1, timescale: 90_000) }
+    private func submit(_ pixelBuffer: CVPixelBuffer, at time: CMTime, isCopy: Bool) {
+        // Timestamps must keep increasing, even if a captured frame was stamped just before a copy.
+        latestTime = max(time, latestTime + CMTime(value: 1, timescale: 90_000))
+        let keyFrame = forceKeyFrame && !isCopy
+        var copy = 0
+        if isCopy {
+            copiesSubmitted += 1
+            copy = copiesSubmitted
+        } else {
+            latestFrame = pixelBuffer
+            framesSubmitted += 1
+            forceKeyFrame = false
+            if lastWasCopy {
+                let showTime = latestTime - CMTime(value: 1, timescale: 90_000)
+                copyLock.withLock {
+                    if lastCopyOut < copiesSubmitted { copyShowTimes[copiesSubmitted] = showTime }
+                }
             }
-            lastWasCopy = isCopy
-            defer { if !isCopy { forceKeyFrame = false } }
-            return (forceKeyFrame && !isCopy, latestTime, framesSubmitted)
         }
+        lastWasCopy = isCopy
+
         let options = keyFrame ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
-        VTCompressionSessionEncodeFrame(session, imageBuffer: pixelBuffer, presentationTimeStamp: presentationTime,
+        VTCompressionSessionEncodeFrame(session, imageBuffer: pixelBuffer, presentationTimeStamp: latestTime,
                                         duration: .invalid, frameProperties: options, infoFlagsOut: nil) {
             [weak self] status, _, sample in
             guard let self, status == noErr, let sample, let (data, isKeyFrame) = Self.annexB(from: sample) else { return }
-            // A copy comes out late, only when the next frame pushes it; show it just before that frame.
-            let time = isCopy ? lock.withLock { self.copyShowTime } : sample.presentationTimeStamp
-            onEncodedFrame?(data, isKeyFrame, isCopy, time.isValid ? time : sample.presentationTimeStamp)
+            // A copy usually comes out late, when the next frame pushes it; show it just before that frame.
+            // If it came out on its own, its own timestamp is already in order.
+            var time = sample.presentationTimeStamp
+            if isCopy {
+                copyLock.withLock {
+                    self.lastCopyOut = copy
+                    if let showTime = self.copyShowTimes.removeValue(forKey: copy) { time = showTime }
+                }
+            }
+            onEncodedFrame?(data, isKeyFrame, isCopy, time)
         }
-        return count
     }
 
     /// Converts VideoToolbox's length-prefixed NAL units into an Annex B byte stream.
