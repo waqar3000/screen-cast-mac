@@ -31,7 +31,14 @@ Screen Cast is a free, open-source Mac app that sends your screen to a Chromecas
 - macOS 13 Ventura or later, on an Apple Silicon or Intel Mac
 - A Google Chromecast, or a TV with Chromecast built in, on the same network as your Mac
 
-So far it has been tested with a Chromecast on macOS 15 (Intel MacBook Pro). Other Cast devices that Chrome can mirror to should work too. If you try one, please [say how it went](https://github.com/waqar3000/screen-cast-mac/issues).
+Other Cast devices that Chrome can mirror to should work too. Known to work so far:
+
+| Cast device | Mac | Mirror | Second display |
+|---|---|---|---|
+| Google Chromecast | macOS 15, Intel MacBook Pro | ✓ | ✓ |
+| XGimi Halo (Chromecast built in) | macOS 14, MacBook Pro M1 Max | ✓ | ✓ |
+
+If you try another device, please [tell us how it went](https://github.com/waqar3000/screen-cast-mac/issues/new/choose).
 
 ## Install
 
